@@ -33,10 +33,11 @@ class MinecraftFarmBot:
     def start_bot(self):
         """Uruchom bota"""
         self.running = True
-        self.log("✓ Bot WŁĄCZONY")
+        self.log("✓ Bot WŁĄCZONY - pracuje w tle!")
         self.log(f"  Czas chodzenia: {self.config['walk_duration']}s")
         self.log(f"  Piętro do warpa: {self.config['warp_interval']}")
         self.log(f"  Przycisk warpa: {self.config['warp_key']}")
+        self.log(f"  Przycisk sella: '{self.config['sell_key']}'")
         threading.Thread(target=self.farm_loop, daemon=True).start()
         threading.Thread(target=self.monitor_inventory, daemon=True).start()
         if self.config.get('enable_chat_monitor', False):
@@ -49,6 +50,7 @@ class MinecraftFarmBot:
         
     def farm_loop(self):
         """Główna pętla - chodzenie A i D"""
+        sell_counter = 0
         while self.running:
             if not self.eq_open and not self.in_chat:
                 # Chodzenie prawo
@@ -59,17 +61,19 @@ class MinecraftFarmBot:
                 
                 # Liczenie pięter
                 self.floor_count += 1
+                sell_counter += 1
+                
+                # Sell co X pięter
+                if self.config['sell_interval'] > 0 and sell_counter >= self.config['sell_interval']:
+                    self.sell_items()
+                    sell_counter = 0
+                
                 self.log(f"[FARMA] Piętro: {self.floor_count}/{self.config['warp_interval']}")
                 
                 # Warp co X pięter
                 if self.floor_count >= self.config['warp_interval']:
                     self.log(f"[WARP] Po {self.floor_count} piętrach - teleportacja!")
                     self.teleport_warp()
-                    
-                    # Sell co X pięter
-                    if self.config['sell_interval'] > 0 and self.warps_done % (self.config['sell_interval'] / self.config['warp_interval']) == 0:
-                        self.sell_items()
-                    
                     self.floor_count = 0
                     self.warps_done += 1
                     time.sleep(3)
@@ -93,22 +97,29 @@ class MinecraftFarmBot:
         """Sprzedaj przedmioty"""
         self.log(f"[SELL] Wciskam klawisz '{self.config['sell_key']}'!")
         keyboard.press(self.config['sell_key'])
-        time.sleep(0.5)
+        time.sleep(0.3)
         keyboard.release(self.config['sell_key'])
         self.sells_done += 1
         self.log(f"[SELL] ✓ Sprzedano! (razem: {self.sells_done})")
     
     def get_screen(self):
         """Przechwytaj ekran"""
-        with mss.mss() as sct:
-            screenshot = sct.grab(sct.monitors[1])
-            return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        try:
+            with mss.mss() as sct:
+                screenshot = sct.grab(sct.monitors[1])
+                return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        except:
+            return None
     
     def monitor_inventory(self):
         """Monitoruj otwarcie EQ i szukaj pogrubionego przedmiotu"""
         while self.running:
             try:
                 screen = self.get_screen()
+                if screen is None:
+                    time.sleep(0.5)
+                    continue
+                    
                 enlarged_text_pos = self.find_enlarged_text(screen)
                 
                 if enlarged_text_pos:
@@ -156,6 +167,9 @@ class MinecraftFarmBot:
         while self.running:
             try:
                 screen = self.get_screen()
+                if screen is None:
+                    time.sleep(0.5)
+                    continue
                 
                 if screen.shape[0] > 520:
                     chat_region = screen[520:, 0:320]
@@ -224,7 +238,7 @@ class MinecraftFarmBot:
 class BotGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("🎮 Minecraft Farm Bot v2.0")
+        self.root.title("🎮 Minecraft Farm Bot v2.1 - Działa w tle!")
         self.root.geometry("800x950")
         self.root.resizable(False, False)
         
@@ -253,7 +267,7 @@ class BotGUI:
             'walk_duration': 1.0,
             'warp_key': '/',
             'warp_interval': 10,
-            'sell_key': 'f',
+            'sell_key': "'",
             'sell_interval': 0,
             'enable_chat_monitor': False
         }
@@ -267,7 +281,7 @@ class BotGUI:
                 'walk_duration': float(self.walk_duration_entry.get() or 1.0),
                 'warp_key': self.warp_key_entry.get() or '/',
                 'warp_interval': int(self.warp_interval_entry.get() or 10),
-                'sell_key': self.sell_key_entry.get().lower() or 'f',
+                'sell_key': self.sell_key_entry.get() or "'",
                 'sell_interval': int(self.sell_interval_entry.get() or 0),
                 'enable_chat_monitor': self.chat_monitor_var.get()
             }
@@ -312,7 +326,7 @@ class BotGUI:
         self.warp_key_entry.pack(anchor=tk.W, pady=(0, 10))
         
         # Przycisk sella
-        ttk.Label(config_frame, text="Przycisk SELL (F):").pack(anchor=tk.W)
+        ttk.Label(config_frame, text="Przycisk SELL ('):").pack(anchor=tk.W)
         self.sell_key_entry = ttk.Entry(config_frame, width=15)
         self.sell_key_entry.insert(0, self.config['sell_key'])
         self.sell_key_entry.pack(anchor=tk.W, pady=(0, 20))
@@ -358,6 +372,11 @@ class BotGUI:
         # === ZAKŁADKA 2: KONTROLA ===
         control_frame = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(control_frame, text="🎮 Kontrola")
+        
+        # Info
+        info_label = ttk.Label(control_frame, text="⚠️ Bot pracuje w tle - możesz grać bez przeszkód!", 
+                              font=("Arial", 10, "bold"), foreground="green")
+        info_label.pack(pady=10)
         
         # Status
         status_frame = ttk.LabelFrame(control_frame, text="Status", padding=10)
@@ -410,7 +429,7 @@ class BotGUI:
         self.save_config()
         self.bot = MinecraftFarmBot(self.log_queue, self.config)
         self.bot.start_bot()
-        self.status_label.config(text="🟢 BOT WŁĄCZONY")
+        self.status_label.config(text="🟢 BOT WŁĄCZONY - pracuje w tle!")
         self.start_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
     
