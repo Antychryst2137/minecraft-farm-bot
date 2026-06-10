@@ -9,18 +9,21 @@ from PIL import Image
 import tkinter as tk
 from tkinter import ttk
 import queue
+import json
+import os
 
 class MinecraftFarmBot:
-    def __init__(self, log_queue):
+    def __init__(self, log_queue, config):
         self.running = False
         self.floor_count = 0
-        self.warp_interval = 10
+        self.config = config
         self.eq_open = False
         self.in_chat = False
         self.log_queue = log_queue
         self.items_clicked = 0
         self.links_clicked = 0
         self.warps_done = 0
+        self.sells_done = 0
         
     def log(self, message):
         """Wyślij log do GUI"""
@@ -31,9 +34,13 @@ class MinecraftFarmBot:
         """Uruchom bota"""
         self.running = True
         self.log("✓ Bot WŁĄCZONY")
+        self.log(f"  Czas chodzenia: {self.config['walk_duration']}s")
+        self.log(f"  Piętro do warpa: {self.config['warp_interval']}")
+        self.log(f"  Przycisk warpa: {self.config['warp_key']}")
         threading.Thread(target=self.farm_loop, daemon=True).start()
         threading.Thread(target=self.monitor_inventory, daemon=True).start()
-        threading.Thread(target=self.monitor_chat, daemon=True).start()
+        if self.config.get('enable_chat_monitor', False):
+            threading.Thread(target=self.monitor_chat, daemon=True).start()
         
     def stop_bot(self):
         """Zatrzymaj bota"""
@@ -44,38 +51,52 @@ class MinecraftFarmBot:
         """Główna pętla - chodzenie A i D"""
         while self.running:
             if not self.eq_open and not self.in_chat:
-                # Chodzenie prawo (D)
-                keyboard.press('d')
-                time.sleep(0.1)
-                keyboard.release('d')
-                time.sleep(0.4)
+                # Chodzenie prawo
+                keyboard.press(self.config['right_key'])
+                time.sleep(self.config['walk_duration'])
+                keyboard.release(self.config['right_key'])
+                time.sleep(0.2)
                 
                 # Liczenie pięter
                 self.floor_count += 1
-                self.log(f"[FARMA] Piętro: {self.floor_count}/{self.warp_interval}")
+                self.log(f"[FARMA] Piętro: {self.floor_count}/{self.config['warp_interval']}")
                 
                 # Warp co X pięter
-                if self.floor_count >= self.warp_interval:
+                if self.floor_count >= self.config['warp_interval']:
                     self.log(f"[WARP] Po {self.floor_count} piętrach - teleportacja!")
                     self.teleport_warp()
+                    
+                    # Sell co X pięter
+                    if self.config['sell_interval'] > 0 and self.warps_done % (self.config['sell_interval'] / self.config['warp_interval']) == 0:
+                        self.sell_items()
+                    
                     self.floor_count = 0
                     self.warps_done += 1
                     time.sleep(3)
                 
-                # Chodzenie lewo (A)
-                keyboard.press('a')
-                time.sleep(0.1)
-                keyboard.release('a')
-                time.sleep(0.4)
+                # Chodzenie lewo
+                keyboard.press(self.config['left_key'])
+                time.sleep(self.config['walk_duration'])
+                keyboard.release(self.config['left_key'])
+                time.sleep(0.2)
             else:
                 time.sleep(0.1)
     
     def teleport_warp(self):
-        """Teleportuj się na warp - klawisz /"""
-        keyboard.press('/')
+        """Teleportuj się na warp"""
+        keyboard.press(self.config['warp_key'])
         time.sleep(0.5)
-        keyboard.release('/')
-        self.log("[WARP] Klawisz / wciśnięty!")
+        keyboard.release(self.config['warp_key'])
+        self.log(f"[WARP] Klawisz '{self.config['warp_key']}' wciśnięty!")
+    
+    def sell_items(self):
+        """Sprzedaj przedmioty"""
+        self.log(f"[SELL] Wciskam klawisz '{self.config['sell_key']}'!")
+        keyboard.press(self.config['sell_key'])
+        time.sleep(0.5)
+        keyboard.release(self.config['sell_key'])
+        self.sells_done += 1
+        self.log(f"[SELL] ✓ Sprzedano! (razem: {self.sells_done})")
     
     def get_screen(self):
         """Przechwytaj ekran"""
@@ -203,112 +224,203 @@ class MinecraftFarmBot:
 class BotGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("🎮 Minecraft Farm Bot v1.0")
-        self.root.geometry("600x700")
+        self.root.title("🎮 Minecraft Farm Bot v2.0")
+        self.root.geometry("800x950")
         self.root.resizable(False, False)
-        self.root.configure(bg='#1e1e1e')
         
         self.log_queue = queue.Queue()
-        self.bot = MinecraftFarmBot(self.log_queue)
+        self.bot = None
+        self.config = self.load_config()
         
         self.setup_ui()
         self.update_logs()
         self.update_stats()
         
-    def setup_ui(self):
-        """Stwórz interfejs"""
-        
-        # Nagłówek
-        header = tk.Frame(self.root, bg='#2d2d2d', height=60)
-        header.pack(fill=tk.X, padx=0, pady=0)
-        
-        title = tk.Label(header, text="🎮 MINECRAFT FARM BOT", 
-                        font=("Arial", 16, "bold"), bg='#2d2d2d', fg='#00ff00')
-        title.pack(pady=10)
-        
-        # Panel kontrolny
-        control_frame = tk.Frame(self.root, bg='#1e1e1e')
-        control_frame.pack(fill=tk.X, padx=20, pady=15)
-        
-        # Przycisk START
-        self.start_btn = tk.Button(control_frame, text="▶ START (F6)", 
-                                   command=self.start_bot, 
-                                   font=("Arial", 12, "bold"),
-                                   bg='#00aa00', fg='white', width=15, height=2)
-        self.start_btn.pack(side=tk.LEFT, padx=10)
-        
-        # Przycisk STOP
-        self.stop_btn = tk.Button(control_frame, text="⏹ STOP (F7)", 
-                                  command=self.stop_bot,
-                                  font=("Arial", 12, "bold"),
-                                  bg='#aa0000', fg='white', width=15, height=2)
-        self.stop_btn.pack(side=tk.LEFT, padx=10)
-        
-        # Status
-        status_frame = tk.Frame(self.root, bg='#2d2d2d')
-        status_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        tk.Label(status_frame, text="Status:", font=("Arial", 10, "bold"), 
-                bg='#2d2d2d', fg='#ffffff').pack(anchor=tk.W)
-        
-        self.status_label = tk.Label(status_frame, text="⭕ BOT WYŁĄCZONY", 
-                                     font=("Arial", 11), bg='#2d2d2d', fg='#ff6666')
-        self.status_label.pack(anchor=tk.W, pady=5)
-        
-        # Statystyka
-        stats_frame = tk.Frame(self.root, bg='#2d2d2d')
-        stats_frame.pack(fill=tk.X, padx=20, pady=10)
-        
-        tk.Label(stats_frame, text="Statystyka:", font=("Arial", 10, "bold"),
-                bg='#2d2d2d', fg='#ffffff').pack(anchor=tk.W)
-        
-        self.stats_text = tk.Label(stats_frame, text="", font=("Arial", 10),
-                                   bg='#2d2d2d', fg='#00ff00', justify=tk.LEFT)
-        self.stats_text.pack(anchor=tk.W, pady=5)
-        
-        # Logi
-        log_frame = tk.Frame(self.root, bg='#1e1e1e')
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        
-        tk.Label(log_frame, text="Logi:", font=("Arial", 10, "bold"),
-                bg='#1e1e1e', fg='#ffffff').pack(anchor=tk.W)
-        
-        # Scrollbar
-        scrollbar = tk.Scrollbar(log_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Text widget
-        self.log_text = tk.Text(log_frame, height=15, width=70,
-                               bg='#000000', fg='#00ff00', font=("Courier", 9),
-                               yscrollcommand=scrollbar.set)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.log_text.yview)
-        
-        # Footer
-        footer = tk.Frame(self.root, bg='#2d2d2d', height=40)
-        footer.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        footer_text = tk.Label(footer, text="F6 = START | F7 = STOP | Made with ❤️ for Minecraft",
-                              font=("Arial", 8), bg='#2d2d2d', fg='#666666')
-        footer_text.pack(pady=8)
-        
         # Hotkeye
         self.root.bind('<F6>', lambda e: self.start_bot())
         self.root.bind('<F7>', lambda e: self.stop_bot())
+        
+    def load_config(self):
+        """Załaduj konfigurację z pliku"""
+        if os.path.exists('config.json'):
+            with open('config.json', 'r') as f:
+                return json.load(f)
+        
+        # Domyślna konfiguracja
+        return {
+            'left_key': 'a',
+            'right_key': 'd',
+            'walk_duration': 1.0,
+            'warp_key': '/',
+            'warp_interval': 10,
+            'sell_key': 'f',
+            'sell_interval': 0,
+            'enable_chat_monitor': False
+        }
+    
+    def save_config(self):
+        """Zapisz konfigurację do pliku"""
+        try:
+            self.config = {
+                'left_key': self.left_key_entry.get().lower() or 'a',
+                'right_key': self.right_key_entry.get().lower() or 'd',
+                'walk_duration': float(self.walk_duration_entry.get() or 1.0),
+                'warp_key': self.warp_key_entry.get() or '/',
+                'warp_interval': int(self.warp_interval_entry.get() or 10),
+                'sell_key': self.sell_key_entry.get().lower() or 'f',
+                'sell_interval': int(self.sell_interval_entry.get() or 0),
+                'enable_chat_monitor': self.chat_monitor_var.get()
+            }
+            
+            with open('config.json', 'w') as f:
+                json.dump(self.config, f, indent=2)
+            
+            self.log("✓ Konfiguracja zapisana!")
+        except ValueError:
+            self.log("❌ Błąd! Sprawdź czy wszystkie wartości są poprawne")
+    
+    def setup_ui(self):
+        """Stwórz interfejs"""
+        
+        # Notebook (zakładki)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # === ZAKŁADKA 1: KONFIGURACJA ===
+        config_frame = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(config_frame, text="⚙️ Konfiguracja")
+        
+        # Przyciski
+        ttk.Label(config_frame, text="PRZYCISKI", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Przycisk lewy
+        ttk.Label(config_frame, text="Przycisk LEWO (A):").pack(anchor=tk.W)
+        self.left_key_entry = ttk.Entry(config_frame, width=15)
+        self.left_key_entry.insert(0, self.config['left_key'])
+        self.left_key_entry.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Przycisk prawy
+        ttk.Label(config_frame, text="Przycisk PRAWO (D):").pack(anchor=tk.W)
+        self.right_key_entry = ttk.Entry(config_frame, width=15)
+        self.right_key_entry.insert(0, self.config['right_key'])
+        self.right_key_entry.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Przycisk warpa
+        ttk.Label(config_frame, text="Przycisk WARP (/):").pack(anchor=tk.W)
+        self.warp_key_entry = ttk.Entry(config_frame, width=15)
+        self.warp_key_entry.insert(0, self.config['warp_key'])
+        self.warp_key_entry.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Przycisk sella
+        ttk.Label(config_frame, text="Przycisk SELL (F):").pack(anchor=tk.W)
+        self.sell_key_entry = ttk.Entry(config_frame, width=15)
+        self.sell_key_entry.insert(0, self.config['sell_key'])
+        self.sell_key_entry.pack(anchor=tk.W, pady=(0, 20))
+        
+        # Czasy i wartości
+        ttk.Separator(config_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        ttk.Label(config_frame, text="CZASY I WARTOŚCI", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(10, 10))
+        
+        # Czas chodzenia
+        ttk.Label(config_frame, text="Czas chodzenia w jedną stronę (sekundy):").pack(anchor=tk.W)
+        self.walk_duration_entry = ttk.Entry(config_frame, width=15)
+        self.walk_duration_entry.insert(0, str(self.config['walk_duration']))
+        self.walk_duration_entry.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Interwał warpa
+        ttk.Label(config_frame, text="Co ile pięter WARP:").pack(anchor=tk.W)
+        self.warp_interval_entry = ttk.Entry(config_frame, width=15)
+        self.warp_interval_entry.insert(0, str(self.config['warp_interval']))
+        self.warp_interval_entry.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Interwał sella
+        ttk.Label(config_frame, text="Co ile pięter SELL (0 = wyłączony):").pack(anchor=tk.W)
+        self.sell_interval_entry = ttk.Entry(config_frame, width=15)
+        self.sell_interval_entry.insert(0, str(self.config['sell_interval']))
+        self.sell_interval_entry.pack(anchor=tk.W, pady=(0, 20))
+        
+        # Opcje
+        ttk.Separator(config_frame, orient='horizontal').pack(fill=tk.X, pady=10)
+        
+        ttk.Label(config_frame, text="OPCJE", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(10, 10))
+        
+        self.chat_monitor_var = tk.BooleanVar(value=self.config.get('enable_chat_monitor', False))
+        chat_check = ttk.Checkbutton(config_frame, text="Monitoruj czat (szukaj linków)", 
+                                     variable=self.chat_monitor_var)
+        chat_check.pack(anchor=tk.W, pady=(0, 20))
+        
+        # Przycisk zapisz
+        save_btn = ttk.Button(config_frame, text="💾 Zapisz konfigurację", 
+                             command=self.save_config)
+        save_btn.pack(fill=tk.X, pady=10)
+        
+        # === ZAKŁADKA 2: KONTROLA ===
+        control_frame = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(control_frame, text="🎮 Kontrola")
+        
+        # Status
+        status_frame = ttk.LabelFrame(control_frame, text="Status", padding=10)
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.status_label = ttk.Label(status_frame, text="⭕ BOT WYŁĄCZONY", 
+                                     font=("Arial", 12, "bold"))
+        self.status_label.pack(pady=10)
+        
+        # Przyciski kontrolne
+        btn_frame = ttk.Frame(control_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.start_btn = ttk.Button(btn_frame, text="▶ START (F6)", 
+                                   command=self.start_bot)
+        self.start_btn.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        self.stop_btn = ttk.Button(btn_frame, text="⏹ STOP (F7)", 
+                                  command=self.stop_bot, state='disabled')
+        self.stop_btn.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # Statystyka
+        stats_frame = ttk.LabelFrame(control_frame, text="Statystyka", padding=10)
+        stats_frame.pack(fill=tk.X)
+        
+        self.stats_text = ttk.Label(stats_frame, text="", font=("Courier", 9), justify=tk.LEFT)
+        self.stats_text.pack(anchor=tk.W)
+        
+        # === ZAKŁADKA 3: LOGI ===
+        logs_frame = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(logs_frame, text="📋 Logi")
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(logs_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Text widget
+        self.log_text = tk.Text(logs_frame, height=30, width=95,
+                               bg='#000000', fg='#00ff00', font=("Courier", 8),
+                               yscrollcommand=scrollbar.set)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.log_text.yview)
+    
+    def log(self, message):
+        """Dodaj log"""
+        self.log_queue.put(message)
     
     def start_bot(self):
         """Włącz bota"""
+        self.save_config()
+        self.bot = MinecraftFarmBot(self.log_queue, self.config)
         self.bot.start_bot()
-        self.status_label.config(text="🟢 BOT WŁĄCZONY", fg='#66ff66')
-        self.start_btn.config(state=tk.DISABLED, bg='#004400')
-        self.stop_btn.config(state=tk.NORMAL, bg='#aa0000')
+        self.status_label.config(text="🟢 BOT WŁĄCZONY")
+        self.start_btn.config(state='disabled')
+        self.stop_btn.config(state='normal')
     
     def stop_bot(self):
         """Wyłącz bota"""
-        self.bot.stop_bot()
-        self.status_label.config(text="⭕ BOT WYŁĄCZONY", fg='#ff6666')
-        self.start_btn.config(state=tk.NORMAL, bg='#00aa00')
-        self.stop_btn.config(state=tk.DISABLED, bg='#440000')
+        if self.bot:
+            self.bot.stop_bot()
+        self.status_label.config(text="⭕ BOT WYŁĄCZONY")
+        self.start_btn.config(state='normal')
+        self.stop_btn.config(state='disabled')
     
     def update_logs(self):
         """Aktualizuj logi z kolejki"""
@@ -324,10 +436,14 @@ class BotGUI:
     
     def update_stats(self):
         """Aktualizuj statystykę"""
-        stats = f"Piętro: {self.bot.floor_count}/{self.bot.warp_interval}\n"
-        stats += f"Warpy: {self.bot.warps_done}\n"
-        stats += f"Przedmioty: {self.bot.items_clicked}\n"
-        stats += f"Linki: {self.bot.links_clicked}"
+        if self.bot and self.bot.running:
+            stats = f"Piętro: {self.bot.floor_count}/{self.config['warp_interval']}\n"
+            stats += f"Warpy: {self.bot.warps_done}\n"
+            stats += f"Sprzedaże: {self.bot.sells_done}\n"
+            stats += f"Przedmioty: {self.bot.items_clicked}\n"
+            stats += f"Linki: {self.bot.links_clicked}"
+        else:
+            stats = "Bot wyłączony"
         
         self.stats_text.config(text=stats)
         self.root.after(500, self.update_stats)
